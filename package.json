@@ -1,0 +1,27 @@
+{
+  "name": "tiktok-voice-bot",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "tiktok-live-connector": "latest"
+  },
+  "build": {
+    "appId": "com.tiktok.voicebot",
+    "win": {
+      "target": "portable",
+      "sign": null
+    },
+    "nsis": {
+      "oneClick": true
+    }
+  }
+}

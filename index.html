@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Live Bot - Split Stream Dashboard</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #ffffff; margin: 0; padding: 0; display: flex; width: 100vw; height: 100vh; overflow: hidden; }
+        .panel-izquierdo { width: 45%; background-color: #1e1e1e; padding: 25px; box-shadow: 4px 0 15px rgba(0,0,0,0.5); display: flex; flex-direction: column; z-index: 10; box-sizing: border-box; }
+        h2 { color: #fe2c55; margin-top: 0; font-size: 24px; text-align: center; }
+        input[type="text"] { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #333; background-color: #2a2a2a; color: white; font-size: 16px; text-align: center; box-sizing: border-box; }
+        button { background-color: #fe2c55; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; }
+        
+        .volume-container { margin-top: 20px; background: #252525; padding: 12px; border-radius: 8px; }
+        .volume-container label { font-size: 14px; color: #ccc; display: flex; justify-content: space-between; }
+        input[type="range"] { width: 100%; margin-top: 8px; accent-color: #fe2c55; cursor: pointer; }
+        
+        .zona-derecha-stream { width: 55%; display: flex; justify-content: center; align-items: center; background-color: #0f0f0f; }
+        #canvas-rebote-chroma { width: 360px; height: 640px; background-color: #00ff00; position: relative; box-shadow: 0 0 30px rgba(0,0,0,0.8); overflow: hidden; border: 2px solid #333; }
+        .bola-rebotadora { position: absolute; width: 45px; height: 45px; border-radius: 50%; border: 2px solid gold; object-fit: cover; z-index: 20; will-change: transform; }
+        .etiqueta-score { position: absolute; background: rgba(0,0,0,0.7); color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: bold; z-index: 25; pointer-events: none; border: 1px solid #555; }
+        #log { margin-top: 15px; background: #111; padding: 12px; border-radius: 6px; flex-grow: 1; height: 220px; overflow-y: auto; font-size: 13px; color: #00ff00; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="panel-izquierdo">
+        <h2>TikTok Voice Bot</h2>
+        <input type="text" id="username" placeholder="Usuario (komboylive)">
+        <button id="btnConectar" onclick="conectarTikTok()">Conectar Bot</button>
+        
+        <div class="volume-container">
+            <label for="volumeSlider"><span>Volumen:</span> <span id="volumeLabel">100%</span></label>
+            <input type="range" id="volumeSlider" min="0" max="100" value="100" oninput="actualizarVolumen(this.value)">
+        </div>
+
+        <div id="status">Estado: Desconectado</div>
+        <div id="log">Historial de eventos...</div>
+    </div>
+    <div class="zona-derecha-stream">
+        <div id="canvas-rebote-chroma"></div>
+    </div>
+
+    <script>
+        const { ipcRenderer } = require('electron');
+        let colaDeAudio = [];
+        let estaHablando = false;
+        let volumenActual = 1.0;
+        let esferasActivas = {}; 
+        const diametroBola = 45;
+
+        function conectarTikTok() {
+            const user = document.getElementById('username').value;
+            if(!user) return alert("Escribe un usuario");
+            ipcRenderer.send('conectar-tiktok', user);
+        }
+
+        function actualizarVolumen(valor) {
+            volumenActual = valor / 100;
+            document.getElementById('volumeLabel').innerText = valor + "%";
+        }
+
+        ipcRenderer.on('status-conectado', () => document.getElementById('status').innerText = "Estado: ¡CONECTADO!");
+        
+        ipcRenderer.on('nuevo-log', (e, texto) => {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += `<div>${texto}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        });
+
+        ipcRenderer.on('mandar-a-decir', (e, data) => {
+            if (colaDeAudio.length > 5) colaDeAudio = colaDeAudio.slice(-5);
+            colaDeAudio.push(data.audio);
+            if (!estaHablando) procesarCola();
+        });
+
+        function procesarCola() {
+            if (colaDeAudio.length === 0) { estaHablando = false; return; }
+            estaHablando = true;
+            const player = new Audio(`data:audio/mp3;base64,${colaDeAudio.shift()}`);
+            player.volume = volumenActual;
+            player.onended = () => setTimeout(procesarCola, 4000);
+            player.play().catch(e => procesarCola());
+        }
+
+        ipcRenderer.on('actualizar-esferas-rebotadoras', (event, topUsuarios) => {
+            const contenedor = document.getElementById('canvas-rebote-chroma');
+            
+            // 1. Identificar quiénes están en la lista nueva
+            let idsActuales = topUsuarios.map(u => u.nombre);
+
+            // 2. Eliminar del DOM y de memoria a los que YA NO están en el ranking
+            for (let id in esferasActivas) {
+                if (!idsActuales.includes(id)) {
+                    contenedor.removeChild(esferasActivas[id].elemento);
+                    contenedor.removeChild(esferasActivas[id].etiqueta);
+                    delete esferasActivas[id];
+                }
+            }
+
+            // 3. Crear o actualizar las esferas del Top 3
+            topUsuarios.forEach((usuario, index) => {
+                let id = usuario.nombre;
+                let puesto = index + 1; 
+                
+                if (!esferasActivas[id]) {
+                    const bolaDOM = document.createElement('img');
+                    bolaDOM.src = usuario.foto;
+                    bolaDOM.className = 'bola-rebotadora';
+                    contenedor.appendChild(bolaDOM);
+
+                    const scoreDOM = document.createElement('div');
+                    scoreDOM.className = 'etiqueta-score';
+                    contenedor.appendChild(scoreDOM);
+
+                    esferasActivas[id] = {
+                        elemento: bolaDOM, etiqueta: scoreDOM,
+                        x: Math.random() * 300, y: Math.random() * 500,
+                        dx: 1.5, dy: 1.5,
+                        nombre: id, apodo: usuario.apodo, clicks: usuario.clicks
+                    };
+                }
+                
+                // Actualizar los datos del ranking
+                esferasActivas[id].clicks = usuario.clicks;
+                esferasActivas[id].etiqueta.innerText = `${puesto}º ${usuario.apodo}: ${usuario.clicks}`;
+            });
+        });
+
+        function animar() {
+            for (let id in esferasActivas) {
+                let b = esferasActivas[id];
+                b.x += b.dx; b.y += b.dy;
+                if (b.x <= 0 || b.x + diametroBola >= 360) b.dx = -b.dx;
+                if (b.y <= 0 || b.y + diametroBola >= 640) b.dy = -b.dy;
+                b.elemento.style.transform = `translate(${b.x}px, ${b.y}px)`;
+                b.etiqueta.style.transform = `translate(${b.x - 5}px, ${b.y - 20}px)`;
+            }
+            requestAnimationFrame(animar);
+        }
+        animar();
+    </script>
+</body>
+</html>
